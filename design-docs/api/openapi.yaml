@@ -1,0 +1,147 @@
+openapi: 3.0.3
+info:
+  title: Order Processing System API - v2
+  description: >
+    Updated API featuring Role-Based Access Control (RBAC) and Address Management.
+  version: 2.0.0
+servers:
+  - url: /api/v1
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    # --- Domain Entities ---
+    User:
+      type: object
+      properties:
+        uuid: { type: string, format: uuid }
+        name: { type: string }
+        email: { type: string, format: email }
+        role:
+          type: string
+          enum: [ADMIN, USER, DELIVERY]
+        is_active: { type: boolean }
+
+    UserAddress:
+      type: object
+      properties:
+        uuid: { type: string, format: uuid }
+        address_line1: { type: string }
+        address_line2: { type: string, nullable: true }
+        city: { type: string }
+        state: { type: string }
+        postal_code: { type: string }
+        country: { type: string }
+        is_current: { type: boolean }
+
+    # --- Updated Request DTOs ---
+    CreateOrderRequest:
+      type: object
+      required: [address_uuid, items]
+      properties:
+        address_uuid: { type: string, format: uuid }
+        items:
+          type: array
+          items:
+            type: object
+            required: [product_uuid, quantity]
+            properties:
+              product_uuid: { type: string, format: uuid }
+              quantity: { type: integer, minimum: 1 }
+
+    UpdateOrderStatusRequest:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [PENDING, PROCESSING, OUT_FOR_DELIVERY, SHIPPED, DELIVERED, CANCELLED]
+        reason: { type: string }
+
+    # --- Standard Response ---
+    ApiResponse:
+      type: object
+      properties:
+        code: { type: integer }
+        message: { type: string }
+        data: { type: object, nullable: true }
+        timestamp: { type: string, format: date-time }
+        request_id: { type: string, format: uuid }
+        errors: { type: array, items: { type: object } }
+
+paths:
+  # --- Address Management ---
+  /user/addresses:
+    get:
+      tags: [User Profile]
+      summary: List user addresses
+      security: [{ BearerAuth: [] }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ApiResponse' } } } }
+    post:
+      tags: [User Profile]
+      summary: Add a new address
+      security: [{ BearerAuth: [] }]
+      responses:
+        '201': { description: Created, content: { application/json: { schema: { $ref: '#/components/schemas/ApiResponse' } } } }
+
+  /user/addresses/{uuid}/current:
+    put:
+      tags: [User Profile]
+      summary: Set address as current/default
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: uuid
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ApiResponse' } } } }
+
+  # --- Order Management ---
+  /orders:
+    post:
+      tags: [Orders]
+      summary: Place a new order (requires address_uuid)
+      security: [{ BearerAuth: [] }]
+      requestBody:
+        content: { application/json: { schema: { $ref: '#/components/schemas/CreateOrderRequest' } } }
+      responses:
+        '201': { description: Created }
+
+  /orders/{uuid}/status:
+    put:
+      tags: [Orders (Privileged)]
+      summary: Update order status (Admin/Delivery Person only)
+      description: >
+        - **Admin**: Can update to any status.
+        - **Delivery Person**: Can update to SHIPPED, OUT_FOR_DELIVERY, or DELIVERED.
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: uuid
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        content: { application/json: { schema: { $ref: '#/components/schemas/UpdateOrderStatusRequest' } } }
+      responses:
+        '200': { description: Status Updated }
+        '403': { description: Forbidden - Role insufficient }
+
+  /orders/{uuid}/cancel:
+    put:
+      tags: [Orders]
+      summary: Cancel order (Customer only)
+      security: [{ BearerAuth: [] }]
+      parameters:
+        - name: uuid
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Cancelled }
