@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"order-management-service/internal/dto"
+	"order-management-service/internal/middleware"
 	"order-management-service/internal/models"
 	"order-management-service/internal/repository"
 	"order-management-service/internal/utils"
@@ -23,6 +24,7 @@ type MessageBroker interface {
 type orderSer struct {
 	orderRepo   repository.OrderRepository
 	productRepo repository.ProductRepository
+	userRepo    repository.UserRepository
 	broker      MessageBroker
 	logger      *zap.Logger
 }
@@ -32,12 +34,14 @@ type OrderService interface {
 	GetOrder(ctx context.Context, uuid uuid.UUID) (*dto.OrderResponse, *dto.AppError)
 	ListOrders(ctx context.Context, userID uint, status string) ([]dto.OrderResponse, *dto.AppError)
 	CancelOrder(ctx context.Context, userUUID, uuid uuid.UUID) *dto.AppError
+	UpdateOrderStatus(ctx context.Context, claims *middleware.UserClaims, orderUUID uuid.UUID, req *dto.UpdateOrderStatusRequest) *dto.AppError
 }
 
-func NewOrderService(orderRepo repository.OrderRepository, productRepo repository.ProductRepository, broker MessageBroker, logger *zap.Logger) OrderService {
+func NewOrderService(orderRepo repository.OrderRepository, productRepo repository.ProductRepository, userRepo repository.UserRepository, broker MessageBroker, logger *zap.Logger) OrderService {
 	return &orderSer{
 		orderRepo:   orderRepo,
 		productRepo: productRepo,
+		userRepo:    userRepo,
 		broker:      broker,
 		logger:      logger,
 	}
@@ -46,6 +50,19 @@ func NewOrderService(orderRepo repository.OrderRepository, productRepo repositor
 func (s *orderSer) CreateOrder(ctx context.Context, userID uint, userUUID uuid.UUID, req *dto.CreateOrderRequest) (*dto.OrderResponse, *dto.AppError) {
 	reqID := utils.GetRequestID(ctx)
 	s.logger.Info("Start OrderService.CreateOrder", zap.String("request_id", reqID))
+
+	// 1. Resolve Address
+	addressUUID, err := uuid.Parse(req.AddressUUID)
+	if err != nil {
+		return nil, dto.NewAppError(dto.ErrCodeBadRequest, "Invalid address UUID", http.StatusBadRequest, err)
+	}
+	addr, appErr := s.userRepo.FindAddressByUUID(ctx, addressUUID)
+	if appErr != nil {
+		return nil, appErr
+	}
+	if addr.UserID != userID {
+		return nil, dto.NewNotFoundError("Address not found for this user")
+	}
 
 	var total float64
 	orderItems := make([]models.OrderItem, 0)
@@ -81,12 +98,14 @@ func (s *orderSer) CreateOrder(ctx context.Context, userID uint, userUUID uuid.U
 
 	order := &models.Order{
 		UserID:      userID,
+		AddressID:   addr.ID,
 		Status:      models.StatusPending,
 		TotalAmount: total,
 		OrderItems:  orderItems,
 	}
 
-	createdOrder, appErr := s.orderRepo.Create(ctx, order)
+	// CreateWithStock handles Atomic Transaction: Stock Deduction + Order Creation + Logging
+	createdOrder, appErr := s.orderRepo.CreateWithStock(ctx, order)
 	if appErr != nil {
 		s.logger.Error("Error OrderService.CreateOrder.Repo", zap.String("request_id", reqID), zap.Error(appErr.Err))
 		return nil, appErr
@@ -139,13 +158,22 @@ func (s *orderSer) CancelOrder(ctx context.Context, userUUID, uuid uuid.UUID) *d
 	reqID := utils.GetRequestID(ctx)
 	s.logger.Info("Start OrderService.CancelOrder", zap.String("request_id", reqID))
 
+	claims := middleware.GetClaims(ctx)
+	if claims == nil {
+		return dto.NewAppError(dto.ErrCodeUnauthorized, "Unauthorized", http.StatusUnauthorized, nil)
+	}
+
+	// RBAC: Only USER and ADMIN can cancel. DELIVERY person cannot.
+	if models.UserRole(claims.Role) == models.RoleDelivery {
+		return dto.NewAppError(dto.ErrCodeUnauthorized, "Delivery person is not allowed to cancel orders", http.StatusForbidden, nil)
+	}
+
 	order, appErr := s.orderRepo.FindByUUID(ctx, uuid)
 	if appErr != nil {
 		s.logger.Error("Error OrderService.CancelOrder.RepoFind", zap.String("request_id", reqID), zap.Error(appErr.Err))
 		return appErr
 	}
 
-	// Condition: Only PENDING orders can be cancelled
 	if order.Status != models.StatusPending {
 		s.logger.Warn("CancelDenied OrderService.CancelOrder.InvalidStatus",
 			zap.String("request_id", reqID),
@@ -164,13 +192,74 @@ func (s *orderSer) CancelOrder(ctx context.Context, userUUID, uuid uuid.UUID) *d
 		TriggeredBy: userUUID.String(),
 	}
 
-	appErr = s.orderRepo.UpdateStatus(ctx, order.ID, models.StatusCancelled, log)
+	// UpdateStatusWithStock handles Atomic Transaction: Status Change + Stock Replenishment + Logging
+	appErr = s.orderRepo.UpdateStatusWithStock(ctx, order.ID, models.StatusCancelled, log)
 	if appErr != nil {
 		s.logger.Error("Error OrderService.CancelOrder.RepoUpdate", zap.String("request_id", reqID), zap.Error(appErr.Err))
 		return appErr
 	}
 
 	s.logger.Info("End OrderService.CancelOrder", zap.String("request_id", reqID))
+	return nil
+}
+
+func (s *orderSer) UpdateOrderStatus(ctx context.Context, claims *middleware.UserClaims, orderUUID uuid.UUID, req *dto.UpdateOrderStatusRequest) *dto.AppError {
+	reqID := utils.GetRequestID(ctx)
+	s.logger.Info("Start OrderService.UpdateOrderStatus", zap.String("request_id", reqID))
+
+	order, appErr := s.orderRepo.FindByUUID(ctx, orderUUID)
+	if appErr != nil {
+		return appErr
+	}
+
+	newStatus := models.OrderStatus(req.Status)
+
+	// --- RBAC Validation ---
+	switch models.UserRole(claims.Role) {
+	case models.RoleAdmin:
+		// Admin can do anything
+	case models.RoleDelivery:
+		// Delivery can move PROCESSING -> SHIPPED -> OUT_FOR_DELIVERY -> DELIVERED
+		allowed := false
+		if (order.Status == models.StatusProcessing && newStatus == models.StatusShipped) ||
+			(order.Status == models.StatusShipped && newStatus == models.StatusOutForDelivery) ||
+			(order.Status == models.StatusOutForDelivery && newStatus == models.StatusDelivered) {
+			allowed = true
+		}
+		if !allowed {
+			return dto.NewAppError(dto.ErrCodeUnauthorized, "Delivery person not allowed to set this status", http.StatusForbidden, nil)
+		}
+	case models.RoleUser:
+		// User can only cancel
+		if newStatus != models.StatusCancelled {
+			return dto.NewAppError(dto.ErrCodeUnauthorized, "User can only cancel orders", http.StatusForbidden, nil)
+		}
+		if order.Status != models.StatusPending {
+			return dto.NewAppError(dto.ErrCodeBadRequest, "Order can only be cancelled if PENDING", http.StatusBadRequest, nil)
+		}
+	default:
+		return dto.NewAppError(dto.ErrCodeUnauthorized, "Insufficient permissions", http.StatusForbidden, nil)
+	}
+
+	log := models.OrderEventLog{
+		FromStatus:  order.Status,
+		ToStatus:    newStatus,
+		Reason:      req.Reason,
+		TriggeredBy: claims.UUID.String(),
+	}
+
+	// UpdateStatusWithStock handles the logic including replenishment if newStatus == CANCELLED
+	if err := s.orderRepo.UpdateStatusWithStock(ctx, order.ID, newStatus, log); err != nil {
+		return err
+	}
+
+	// Publish Status Update Event
+	if s.broker != nil {
+		go func() {
+			_ = s.broker.PublishOrderCreated(context.Background(), order.UUID.String())
+		}()
+	}
+
 	return nil
 }
 

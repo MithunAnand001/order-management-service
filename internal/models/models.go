@@ -11,12 +11,34 @@ const (
 	StatusCancelled      OrderStatus = "CANCELLED"
 )
 
+type UserRole string
+
+const (
+	RoleAdmin    UserRole = "ADMIN"
+	RoleUser     UserRole = "USER"
+	RoleDelivery UserRole = "DELIVERY"
+)
+
 type User struct {
 	Base
-	Name     string  `gorm:"not null" json:"name"`
-	Email    string  `gorm:"uniqueIndex;not null" json:"email"`
-	Password string  `gorm:"not null" json:"-"`
-	Orders   []Order `gorm:"foreignKey:UserID" json:"orders,omitempty"`
+	Role      UserRole      `gorm:"type:text;not null;default:'USER'" json:"role"`
+	Name      string        `gorm:"not null" json:"name"`
+	Email     string        `gorm:"uniqueIndex;not null" json:"email"`
+	Password  string        `gorm:"not null" json:"-"`
+	Addresses []UserAddress `gorm:"foreignKey:UserID" json:"addresses,omitempty"`
+	Orders    []Order       `gorm:"foreignKey:UserID" json:"orders,omitempty"`
+}
+
+type UserAddress struct {
+	Base
+	UserID       uint   `gorm:"index;not null" json:"user_id"`
+	AddressLine1 string `gorm:"not null" json:"address_line1"`
+	AddressLine2 string `json:"address_line2"`
+	City         string `gorm:"not null" json:"city"`
+	State        string `gorm:"not null" json:"state"`
+	PostalCode   string `gorm:"not null" json:"postal_code"`
+	Country      string `gorm:"not null" json:"country"`
+	IsCurrent    bool   `gorm:"index;default:false" json:"is_current"`
 }
 
 type Product struct {
@@ -31,6 +53,8 @@ type Product struct {
 type Order struct {
 	Base
 	UserID      uint            `gorm:"index;not null" json:"user_id"`
+	AddressID   uint            `gorm:"index;not null" json:"address_id"`
+	Address     UserAddress     `gorm:"foreignKey:AddressID" json:"address"`
 	Status      OrderStatus     `gorm:"index;type:text;default:'PENDING'" json:"status"`
 	TotalAmount float64         `gorm:"type:decimal(10,2);not null" json:"total_amount"`
 	OrderItems  []OrderItem     `gorm:"foreignKey:OrderID" json:"items"`

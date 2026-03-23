@@ -3,7 +3,13 @@ package dto
 import "order-management-service/internal/models"
 
 type CreateOrderRequest struct {
-	Items []OrderItemRequest `json:"items" validate:"required,min=1,dive"`
+	AddressUUID string             `json:"address_uuid" validate:"required,uuid"`
+	Items       []OrderItemRequest `json:"items" validate:"required,min=1,dive"`
+}
+
+type UpdateOrderStatusRequest struct {
+	Status string `json:"status" validate:"required"`
+	Reason string `json:"reason"`
 }
 
 type OrderItemRequest struct {

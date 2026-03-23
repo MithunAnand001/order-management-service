@@ -15,6 +15,7 @@ func RunMigrations(db *gorm.DB) {
 
 	err := db.AutoMigrate(
 		&models.User{},
+		&models.UserAddress{},
 		&models.Product{},
 		&models.Order{},
 		&models.OrderItem{},
@@ -24,7 +25,13 @@ func RunMigrations(db *gorm.DB) {
 		log.Fatalf("Failed to run migrations: %v", err)
 	}
 
-	// Seed Products using FirstOrCreate to avoid duplicates but ensure existence
+	// Seed Products
+	seedProducts(db)
+
+	log.Println("Migrations and seeding completed successfully")
+}
+
+func seedProducts(db *gorm.DB) {
 	log.Println("Ensuring initial products exist...")
 	products := []models.Product{
 		{SKU: "PROD-001", Name: "Laptop", Description: "High-end gaming laptop", CurrentPrice: 1500.00, StockQuantity: 10},
@@ -37,6 +44,4 @@ func RunMigrations(db *gorm.DB) {
 			log.Printf("Failed to ensure product %s: %v", p.SKU, err)
 		}
 	}
-
-	log.Println("Migrations and seeding completed successfully")
 }

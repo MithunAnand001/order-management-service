@@ -117,12 +117,14 @@ func initializeApp() *App {
 	userSvc := service.NewUserService(userRepo, cfg, logger)
 	productSvc := service.NewProductService(productRepo, logger)
 	commSvc := service.NewCommunicationService(cfg, logger)
+	addressSvc := service.NewAddressService(userRepo, logger)
 	activitySvc := service.NewOrderActivityService(userRepo, orderRepo, commSvc, logger)
-	orderSvc := service.NewOrderService(orderRepo, productRepo, broker, logger)
+	orderSvc := service.NewOrderService(orderRepo, productRepo, userRepo, broker, logger)
 
 	// Controllers (Inject Logger)
 	userCtrl := controller.NewUserController(userSvc, logger)
 	productCtrl := controller.NewProductController(productSvc, logger)
+	addressCtrl := controller.NewAddressController(addressSvc, logger)
 	orderCtrl := controller.NewOrderController(orderSvc, logger)
 
 	consumer, err := rabbitmq.NewRabbitMQConsumer(cfg, logger, activitySvc)
@@ -141,7 +143,7 @@ func initializeApp() *App {
 
 	r.Use(CORS)
 
-	AppRoutes(r, userCtrl, productCtrl, orderCtrl, userRepo, cfg)
+	AppRoutes(r, userCtrl, productCtrl, orderCtrl, addressCtrl, userRepo, cfg)
 
 	return &App{
 		Router:   r,
@@ -168,12 +170,12 @@ func CORS(next http.Handler) http.Handler {
 	})
 }
 
-func AppRoutes(r *mux.Router, userCtrl controller.UserController, productCtrl controller.ProductController, orderCtrl controller.OrderController, userRepo repository.UserRepository, cfg *config.Config) {
+func AppRoutes(r *mux.Router, userCtrl controller.UserController, productCtrl controller.ProductController, orderCtrl controller.OrderController, addrCtrl controller.AddressController, userRepo repository.UserRepository, cfg *config.Config) {
 	api := r.PathPrefix("/api/v1").Subrouter()
 
-	routes.RegisterUserRoutes(api, userCtrl)
-	routes.RegisterProductRoutes(api, productCtrl)
-
 	authMiddleware := middleware.AuthMiddleware(cfg.JWTSecret, userRepo)
+
+	routes.RegisterUserRoutes(api, userCtrl, addrCtrl, authMiddleware)
+	routes.RegisterProductRoutes(api, productCtrl)
 	routes.RegisterOrderRoutes(api, orderCtrl, authMiddleware)
 }

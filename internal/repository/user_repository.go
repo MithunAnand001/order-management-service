@@ -19,6 +19,12 @@ type UserRepository interface {
 	FindByEmail(ctx context.Context, email string) (*models.User, *dto.AppError)
 	FindByUUID(ctx context.Context, uuid uuid.UUID) (*models.User, *dto.AppError)
 	FindByID(ctx context.Context, id uint) (*models.User, *dto.AppError)
+	
+	// Address Methods
+	CreateAddress(ctx context.Context, addr *models.UserAddress) (*models.UserAddress, *dto.AppError)
+	ListAddresses(ctx context.Context, userID uint) ([]models.UserAddress, *dto.AppError)
+	FindAddressByUUID(ctx context.Context, uuid uuid.UUID) (*models.UserAddress, *dto.AppError)
+	SetCurrentAddress(ctx context.Context, userID uint, addressID uint) *dto.AppError
 }
 
 type userRepo struct {
@@ -53,14 +59,11 @@ func (r *userRepo) FindByEmail(ctx context.Context, email string) (*models.User,
 	var user models.User
 	if err := r.db.WithContext(ctx).Where("email = ? AND is_active = ?", email, true).First(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			r.logger.Warn("NotFound UserRepository.FindByEmail", zap.String("request_id", reqID), zap.String("email", email))
 			return nil, dto.NewNotFoundError("User not found")
 		}
-		r.logger.Error("Error UserRepository.FindByEmail", zap.String("request_id", reqID), zap.Error(err))
 		return nil, dto.NewInternalError(err)
 	}
 
-	r.logger.Info("End UserRepository.FindByEmail", zap.String("request_id", reqID))
 	return &user, nil
 }
 
@@ -71,14 +74,11 @@ func (r *userRepo) FindByUUID(ctx context.Context, uuid uuid.UUID) (*models.User
 	var user models.User
 	if err := r.db.WithContext(ctx).Where("uuid = ? AND is_active = ?", uuid, true).First(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			r.logger.Warn("NotFound UserRepository.FindByUUID", zap.String("request_id", reqID), zap.String("uuid", uuid.String()))
 			return nil, dto.NewNotFoundError("User not found")
 		}
-		r.logger.Error("Error UserRepository.FindByUUID", zap.String("request_id", reqID), zap.Error(err))
 		return nil, dto.NewInternalError(err)
 	}
 
-	r.logger.Info("End UserRepository.FindByUUID", zap.String("request_id", reqID))
 	return &user, nil
 }
 
@@ -89,13 +89,60 @@ func (r *userRepo) FindByID(ctx context.Context, id uint) (*models.User, *dto.Ap
 	var user models.User
 	if err := r.db.WithContext(ctx).Where("id = ? AND is_active = ?", id, true).First(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			r.logger.Warn("NotFound UserRepository.FindByID", zap.String("request_id", reqID), zap.Uint("id", id))
 			return nil, dto.NewNotFoundError("User not found")
 		}
-		r.logger.Error("Error UserRepository.FindByID", zap.String("request_id", reqID), zap.Error(err))
 		return nil, dto.NewInternalError(err)
 	}
 
-	r.logger.Info("End UserRepository.FindByID", zap.String("request_id", reqID))
 	return &user, nil
+}
+
+func (r *userRepo) CreateAddress(ctx context.Context, addr *models.UserAddress) (*models.UserAddress, *dto.AppError) {
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if addr.IsCurrent {
+			if err := tx.Model(&models.UserAddress{}).Where("user_id = ?", addr.UserID).Update("is_current", false).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Create(addr).Error
+	})
+	if err != nil {
+		return nil, dto.NewInternalError(err)
+	}
+	return addr, nil
+}
+
+func (r *userRepo) ListAddresses(ctx context.Context, userID uint) ([]models.UserAddress, *dto.AppError) {
+	var addrs []models.UserAddress
+	if err := r.db.WithContext(ctx).Where("user_id = ? AND is_active = ?", userID, true).Order("is_current DESC, created_on DESC").Find(&addrs).Error; err != nil {
+		return nil, dto.NewInternalError(err)
+	}
+	return addrs, nil
+}
+
+func (r *userRepo) FindAddressByUUID(ctx context.Context, uuid uuid.UUID) (*models.UserAddress, *dto.AppError) {
+	var addr models.UserAddress
+	if err := r.db.WithContext(ctx).Where("uuid = ? AND is_active = ?", uuid, true).First(&addr).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, dto.NewNotFoundError("Address not found")
+		}
+		return nil, dto.NewInternalError(err)
+	}
+	return &addr, nil
+}
+
+func (r *userRepo) SetCurrentAddress(ctx context.Context, userID uint, addressID uint) *dto.AppError {
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&models.UserAddress{}).Where("user_id = ?", userID).Update("is_current", false).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&models.UserAddress{}).Where("id = ?", addressID).Update("is_current", true).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return dto.NewInternalError(err)
+	}
+	return nil
 }

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"net/http"
 
 	"order-management-service/internal/dto"
 	"order-management-service/internal/models"
@@ -16,6 +17,8 @@ import (
 type ProductRepository interface {
 	FindAll(ctx context.Context, search string, limit, offset int) ([]models.Product, int64, *dto.AppError)
 	FindByUUID(ctx context.Context, uuid uuid.UUID) (*models.Product, *dto.AppError)
+	DecrementStock(ctx context.Context, productID uint, quantity int) *dto.AppError
+	IncrementStock(ctx context.Context, productID uint, quantity int) *dto.AppError
 }
 
 type productRepo struct {
@@ -69,4 +72,43 @@ func (r *productRepo) FindByUUID(ctx context.Context, uuid uuid.UUID) (*models.P
 
 	r.logger.Info("End ProductRepository.FindByUUID", zap.String("request_id", reqID))
 	return &product, nil
+}
+
+func (r *productRepo) DecrementStock(ctx context.Context, productID uint, quantity int) *dto.AppError {
+	reqID := utils.GetRequestID(ctx)
+	r.logger.Info("Start ProductRepository.DecrementStock", zap.String("request_id", reqID), zap.Uint("product_id", productID))
+
+	// Atomic update at DB level
+	result := r.db.WithContext(ctx).Model(&models.Product{}).
+		Where("id = ? AND stock_quantity >= ?", productID, quantity).
+		Update("stock_quantity", gorm.Expr("stock_quantity - ?", quantity))
+
+	if result.Error != nil {
+		r.logger.Error("Error ProductRepository.DecrementStock", zap.String("request_id", reqID), zap.Error(result.Error))
+		return dto.NewInternalError(result.Error)
+	}
+
+	if result.RowsAffected == 0 {
+		return dto.NewAppError(dto.ErrCodeBadRequest, "Insufficient stock", http.StatusBadRequest, nil)
+	}
+
+	r.logger.Info("End ProductRepository.DecrementStock", zap.String("request_id", reqID))
+	return nil
+}
+
+func (r *productRepo) IncrementStock(ctx context.Context, productID uint, quantity int) *dto.AppError {
+	reqID := utils.GetRequestID(ctx)
+	r.logger.Info("Start ProductRepository.IncrementStock", zap.String("request_id", reqID), zap.Uint("product_id", productID))
+
+	result := r.db.WithContext(ctx).Model(&models.Product{}).
+		Where("id = ?", productID).
+		Update("stock_quantity", gorm.Expr("stock_quantity + ?", quantity))
+
+	if result.Error != nil {
+		r.logger.Error("Error ProductRepository.IncrementStock", zap.String("request_id", reqID), zap.Error(result.Error))
+		return dto.NewInternalError(result.Error)
+	}
+
+	r.logger.Info("End ProductRepository.IncrementStock", zap.String("request_id", reqID))
+	return nil
 }

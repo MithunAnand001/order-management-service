@@ -23,6 +23,7 @@ type OrderController interface {
 	GetOrder(w http.ResponseWriter, r *http.Request)
 	ListOrders(w http.ResponseWriter, r *http.Request)
 	CancelOrder(w http.ResponseWriter, r *http.Request)
+	UpdateStatus(w http.ResponseWriter, r *http.Request)
 }
 
 func NewOrderController(svc service.OrderService, logger *zap.Logger) OrderController {
@@ -116,11 +117,41 @@ func (c *orderCtrl) CancelOrder(w http.ResponseWriter, r *http.Request) {
 
 	appErr := c.svc.CancelOrder(r.Context(), claims.UUID, orderUUID)
 	if appErr != nil {
-		c.logger.Error("Error OrderService.CancelOrder.Service", zap.String("request_id", reqID), zap.Error(appErr.Err))
+		c.logger.Error("Error OrderController.CancelOrder.Service", zap.String("request_id", reqID), zap.Error(appErr.Err))
 		utils.SendJSON(w, appErr.HTTPStatus, utils.NewErrorResponse(r.Context(), appErr))
 		return
 	}
 
 	c.logger.Info("End OrderController.CancelOrder", zap.String("request_id", reqID), zap.String("method", r.Method))
 	utils.SendJSON(w, http.StatusOK, utils.NewSuccessResponse(r.Context(), interface{}(nil), "Order cancelled successfully", http.StatusOK))
+}
+
+func (c *orderCtrl) UpdateStatus(w http.ResponseWriter, r *http.Request) {
+	reqID := utils.GetRequestID(r.Context())
+	c.logger.Info("Start OrderController.UpdateStatus", zap.String("request_id", reqID), zap.String("method", r.Method))
+
+	claims := middleware.GetClaims(r.Context())
+	vars := mux.Vars(r)
+	orderUUIDStr := vars["uuid"]
+	orderUUID, err := uuid.Parse(orderUUIDStr)
+	if err != nil {
+		c.logger.Error("Error OrderController.UpdateStatus.ParseUUID", zap.String("request_id", reqID), zap.Error(err))
+		utils.SendJSON(w, http.StatusBadRequest, utils.NewErrorResponse(r.Context(), dto.NewAppError(dto.ErrCodeBadRequest, "Invalid order UUID", http.StatusBadRequest, err)))
+		return
+	}
+
+	req, appErr := utils.DecodeAndValidate[dto.UpdateOrderStatusRequest](r)
+	if appErr != nil {
+		utils.SendJSON(w, appErr.HTTPStatus, utils.NewErrorResponse(r.Context(), appErr))
+		return
+	}
+
+	appErr = c.svc.UpdateOrderStatus(r.Context(), claims, orderUUID, req)
+	if appErr != nil {
+		utils.SendJSON(w, appErr.HTTPStatus, utils.NewErrorResponse(r.Context(), appErr))
+		return
+	}
+
+	c.logger.Info("End OrderController.UpdateStatus", zap.String("request_id", reqID), zap.String("method", r.Method))
+	utils.SendJSON(w, http.StatusOK, utils.NewSuccessResponse(r.Context(), interface{}(nil), "Order status updated", http.StatusOK))
 }

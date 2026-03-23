@@ -37,34 +37,63 @@ func (s *userSer) Register(ctx context.Context, req *dto.CreateUserRequest) (*dt
 	reqID := utils.GetRequestID(ctx)
 	s.logger.Info("Start UserService.Register", zap.String("request_id", reqID))
 
+	// 1. Hash Password
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		s.logger.Error("Error UserService.Register.Hash", zap.String("request_id", reqID), zap.Error(err))
 		return nil, dto.NewInternalError(err)
 	}
 
+	// 2. Create User with Role Enum
 	user := &models.User{
 		Name:     req.Name,
 		Email:    req.Email,
 		Password: string(hashedPassword),
+		Role:     models.UserRole(req.RoleCode),
 	}
 
 	createdUser, appErr := s.repo.Create(ctx, user)
 	if appErr != nil {
-		s.logger.Error("Error UserService.Register.Repo", zap.String("request_id", reqID), zap.Error(appErr.Err))
 		return nil, appErr
 	}
 
-	res := &dto.UserResponse{
-		UUID:      createdUser.UUID.String(),
-		Name:      createdUser.Name,
-		Email:     createdUser.Email,
-		CreatedOn: utils.FormatRFC3339(createdUser.CreatedOn),
-		IsActive:  createdUser.IsActive,
+	// 3. Create Initial Address if provided
+	var addressRes []dto.AddressResponse
+	if req.Address != nil {
+		addr := &models.UserAddress{
+			UserID:       createdUser.ID,
+			AddressLine1: req.Address.AddressLine1,
+			AddressLine2: req.Address.AddressLine2,
+			City:         req.Address.City,
+			State:        req.Address.State,
+			PostalCode:   req.Address.PostalCode,
+			Country:      req.Address.Country,
+			IsCurrent:    true,
+		}
+		createdAddr, appErr := s.repo.CreateAddress(ctx, addr)
+		if appErr == nil {
+			addressRes = append(addressRes, dto.AddressResponse{
+				UUID:         createdAddr.UUID.String(),
+				AddressLine1: createdAddr.AddressLine1,
+				AddressLine2: createdAddr.AddressLine2,
+				City:         createdAddr.City,
+				State:        createdAddr.State,
+				PostalCode:   createdAddr.PostalCode,
+				Country:      createdAddr.Country,
+				IsCurrent:    createdAddr.IsCurrent,
+			})
+		}
 	}
 
 	s.logger.Info("End UserService.Register", zap.String("request_id", reqID))
-	return res, nil
+	return &dto.UserResponse{
+		UUID:      createdUser.UUID.String(),
+		Name:      createdUser.Name,
+		Email:     createdUser.Email,
+		Role:      string(createdUser.Role),
+		CreatedOn: utils.FormatRFC3339(createdUser.CreatedOn),
+		IsActive:  createdUser.IsActive,
+		Addresses: addressRes,
+	}, nil
 }
 
 func (s *userSer) Login(ctx context.Context, req *dto.LoginRequest) (*dto.LoginResponse, *dto.AppError) {
@@ -73,12 +102,10 @@ func (s *userSer) Login(ctx context.Context, req *dto.LoginRequest) (*dto.LoginR
 
 	user, appErr := s.repo.FindByEmail(ctx, req.Email)
 	if appErr != nil {
-		s.logger.Error("Error UserService.Login.Repo", zap.String("request_id", reqID), zap.Error(appErr.Err))
 		return nil, appErr
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password)); err != nil {
-		s.logger.Warn("Unauthorized UserService.Login", zap.String("request_id", reqID), zap.String("email", req.Email))
 		return nil, dto.NewAppError(dto.ErrCodeUnauthorized, "Invalid credentials", http.StatusUnauthorized, err)
 	}
 
@@ -92,20 +119,19 @@ func (s *userSer) Login(ctx context.Context, req *dto.LoginRequest) (*dto.LoginR
 		return nil, dto.NewInternalError(err)
 	}
 
-	res := &dto.LoginResponse{
+	s.logger.Info("End UserService.Login", zap.String("request_id", reqID))
+	return &dto.LoginResponse{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
 		User: dto.UserResponse{
 			UUID:      user.UUID.String(),
 			Name:      user.Name,
 			Email:     user.Email,
+			Role:      string(user.Role),
 			CreatedOn: utils.FormatRFC3339(user.CreatedOn),
 			IsActive:  user.IsActive,
 		},
-	}
-
-	s.logger.Info("End UserService.Login", zap.String("request_id", reqID))
-	return res, nil
+	}, nil
 }
 
 func (s *userSer) RefreshToken(ctx context.Context, req *dto.RefreshTokenRequest) (*dto.TokenResponse, *dto.AppError) {
@@ -118,7 +144,6 @@ func (s *userSer) RefreshToken(ctx context.Context, req *dto.RefreshTokenRequest
 	})
 
 	if err != nil || !token.Valid {
-		s.logger.Warn("Unauthorized UserService.RefreshToken", zap.String("request_id", reqID))
 		return nil, dto.NewAppError(dto.ErrCodeUnauthorized, "Invalid or expired refresh token", http.StatusUnauthorized, err)
 	}
 

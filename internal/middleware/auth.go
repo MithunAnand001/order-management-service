@@ -58,6 +58,7 @@ func AuthMiddleware(secret string, userRepo repository.UserRepository) func(http
 				UserID: user.ID,
 				UUID:   user.UUID,
 				Email:  user.Email,
+				Role:   user.Role,
 			}
 
 			ctx := context.WithValue(r.Context(), ClaimsKey, userClaims)

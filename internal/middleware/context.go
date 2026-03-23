@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"order-management-service/internal/models"
 
 	"github.com/google/uuid"
 )
@@ -17,6 +18,7 @@ type UserClaims struct {
 	UserID uint
 	UUID   uuid.UUID
 	Email  string
+	Role   models.UserRole
 }
 
 func GetClaims(ctx context.Context) *UserClaims {
