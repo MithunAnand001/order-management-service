@@ -7,7 +7,6 @@ import (
 
 	"order-management-service/internal/dto"
 	"order-management-service/internal/models"
-	"order-management-service/internal/rabbitmq"
 	"order-management-service/internal/repository"
 	"order-management-service/internal/utils"
 
@@ -15,10 +14,16 @@ import (
 	"go.uber.org/zap"
 )
 
+// MessageBroker defines the interface for publishing events to a message queue.
+type MessageBroker interface {
+	PublishOrderCreated(ctx context.Context, orderUUID string) error
+	Close()
+}
+
 type orderSer struct {
 	orderRepo   repository.OrderRepository
 	productRepo repository.ProductRepository
-	broker      rabbitmq.MessageBroker
+	broker      MessageBroker
 	logger      *zap.Logger
 }
 
@@ -27,10 +32,9 @@ type OrderService interface {
 	GetOrder(ctx context.Context, uuid uuid.UUID) (*dto.OrderResponse, *dto.AppError)
 	ListOrders(ctx context.Context, userID uint, status string) ([]dto.OrderResponse, *dto.AppError)
 	CancelOrder(ctx context.Context, userUUID, uuid uuid.UUID) *dto.AppError
-	ProcessPendingOrders(ctx context.Context) *dto.AppError
 }
 
-func NewOrderService(orderRepo repository.OrderRepository, productRepo repository.ProductRepository, broker rabbitmq.MessageBroker, logger *zap.Logger) OrderService {
+func NewOrderService(orderRepo repository.OrderRepository, productRepo repository.ProductRepository, broker MessageBroker, logger *zap.Logger) OrderService {
 	return &orderSer{
 		orderRepo:   orderRepo,
 		productRepo: productRepo,
@@ -47,7 +51,12 @@ func (s *orderSer) CreateOrder(ctx context.Context, userID uint, userUUID uuid.U
 	orderItems := make([]models.OrderItem, 0)
 
 	for _, itemReq := range req.Items {
-		product, appErr := s.productRepo.FindByUUID(ctx, itemReq.ProductUUID)
+		productUUID, err := uuid.Parse(itemReq.ProductUUID)
+		if err != nil {
+			return nil, dto.NewAppError(dto.ErrCodeBadRequest, "Invalid product UUID", http.StatusBadRequest, err)
+		}
+
+		product, appErr := s.productRepo.FindByUUID(ctx, productUUID)
 		if appErr != nil {
 			s.logger.Error("Error OrderService.CreateOrder.ProductNotFound", zap.String("request_id", reqID), zap.String("product_uuid", itemReq.ProductUUID))
 			return nil, appErr
@@ -162,30 +171,6 @@ func (s *orderSer) CancelOrder(ctx context.Context, userUUID, uuid uuid.UUID) *d
 	}
 
 	s.logger.Info("End OrderService.CancelOrder", zap.String("request_id", reqID))
-	return nil
-}
-
-func (s *orderSer) ProcessPendingOrders(ctx context.Context) *dto.AppError {
-	reqID := utils.GetRequestID(ctx)
-	s.logger.Info("Start OrderService.ProcessPendingOrders", zap.String("request_id", reqID))
-
-	orders, appErr := s.orderRepo.FindPendingOrders(ctx)
-	if appErr != nil {
-		s.logger.Error("Error OrderService.ProcessPendingOrders.RepoFind", zap.String("request_id", reqID), zap.Error(appErr.Err))
-		return appErr
-	}
-
-	for _, o := range orders {
-		log := models.OrderEventLog{
-			FromStatus:  o.Status,
-			ToStatus:    models.StatusProcessing,
-			Reason:      "Scheduled Status Update",
-			TriggeredBy: "SYSTEM",
-		}
-		_ = s.orderRepo.UpdateStatus(ctx, o.ID, models.StatusProcessing, log)
-	}
-
-	s.logger.Info("End OrderService.ProcessPendingOrders", zap.String("request_id", reqID))
 	return nil
 }
 

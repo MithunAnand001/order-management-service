@@ -5,12 +5,12 @@ import "net/http"
 type ErrorCode string
 
 const (
-	ErrCodeInternal    ErrorCode = "INTERNAL_ERROR"
-	ErrCodeNotFound    ErrorCode = "NOT_FOUND"
-	ErrCodeValidation  ErrorCode = "VALIDATION_ERROR"
+	ErrCodeInternal     ErrorCode = "INTERNAL_ERROR"
+	ErrCodeNotFound     ErrorCode = "NOT_FOUND"
+	ErrCodeValidation   ErrorCode = "VALIDATION_ERROR"
 	ErrCodeUnauthorized ErrorCode = "UNAUTHORIZED"
-	ErrCodeConflict    ErrorCode = "CONFLICT"
-	ErrCodeBadRequest  ErrorCode = "BAD_REQUEST"
+	ErrCodeConflict     ErrorCode = "CONFLICT"
+	ErrCodeBadRequest   ErrorCode = "BAD_REQUEST"
 )
 
 type AppError struct {

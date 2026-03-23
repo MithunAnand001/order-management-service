@@ -13,18 +13,17 @@ import (
 	"gorm.io/gorm"
 )
 
-type orderRepo struct {
-	db     *gorm.DB
-	logger *zap.Logger
-}
-
 type OrderRepository interface {
 	Create(ctx context.Context, order *models.Order) (*models.Order, *dto.AppError)
 	FindByID(ctx context.Context, id uint) (*models.Order, *dto.AppError)
 	FindByUUID(ctx context.Context, uuid uuid.UUID) (*models.Order, *dto.AppError)
 	FindAll(ctx context.Context, userID uint, status string) ([]models.Order, *dto.AppError)
 	UpdateStatus(ctx context.Context, id uint, status models.OrderStatus, log models.OrderEventLog) *dto.AppError
-	FindPendingOrders(ctx context.Context) ([]models.Order, *dto.AppError)
+}
+
+type orderRepo struct {
+	db     *gorm.DB
+	logger *zap.Logger
 }
 
 func NewOrderRepository(db *gorm.DB, logger *zap.Logger) OrderRepository {
@@ -84,11 +83,7 @@ func (r *orderRepo) FindByUUID(ctx context.Context, uuid uuid.UUID) (*models.Ord
 	r.logger.Info("Start OrderRepository.FindByUUID", zap.String("request_id", reqID))
 
 	var order models.Order
-	if err := r.db.WithContext(ctx).
-		Preload("OrderItems").
-		Preload("EventLogs").
-		Where("uuid = ?", uuid).
-		First(&order).Error; err != nil {
+	if err := r.db.WithContext(ctx).Preload("OrderItems").Preload("EventLogs").Where("uuid = ?", uuid).First(&order).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			r.logger.Warn("NotFound OrderRepository.FindByUUID", zap.String("request_id", reqID), zap.String("uuid", uuid.String()))
 			return nil, dto.NewNotFoundError("Order not found")
@@ -140,18 +135,4 @@ func (r *orderRepo) UpdateStatus(ctx context.Context, id uint, status models.Ord
 
 	r.logger.Info("End OrderRepository.UpdateStatus", zap.String("request_id", reqID))
 	return nil
-}
-
-func (r *orderRepo) FindPendingOrders(ctx context.Context) ([]models.Order, *dto.AppError) {
-	reqID := utils.GetRequestID(ctx)
-	r.logger.Info("Start OrderRepository.FindPendingOrders", zap.String("request_id", reqID))
-
-	var orders []models.Order
-	if err := r.db.WithContext(ctx).Where("status = ?", models.StatusPending).Find(&orders).Error; err != nil {
-		r.logger.Error("Error OrderRepository.FindPendingOrders", zap.String("request_id", reqID), zap.Error(err))
-		return nil, dto.NewInternalError(err)
-	}
-
-	r.logger.Info("End OrderRepository.FindPendingOrders", zap.String("request_id", reqID))
-	return orders, nil
 }

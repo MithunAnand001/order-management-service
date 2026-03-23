@@ -7,14 +7,10 @@ import (
 	"log"
 
 	"order-management-service/internal/config"
+	"order-management-service/internal/service"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 )
-
-type MessageBroker interface {
-	PublishOrderCreated(ctx context.Context, orderUUID string) error
-	Close()
-}
 
 type rabbitMQBroker struct {
 	conn    *amqp.Connection
@@ -22,7 +18,7 @@ type rabbitMQBroker struct {
 	cfg     *config.Config
 }
 
-func NewRabbitMQBroker(cfg *config.Config) (MessageBroker, error) {
+func NewRabbitMQBroker(cfg *config.Config) (service.MessageBroker, error) {
 	conn, err := amqp.Dial(cfg.RabbitMQURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)

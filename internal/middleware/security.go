@@ -34,7 +34,7 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 		ip := r.RemoteAddr // Simplified; use X-Forwarded-For in prod
 		rl.Lock()
 		now := utils.Now()
-		
+
 		// Keep only requests from the last minute
 		times := []time.Time{}
 		for _, t := range rl.ips[ip] {
@@ -42,17 +42,17 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 				times = append(times, t)
 			}
 		}
-		
+
 		if len(times) >= 60 { // Max 60 requests per minute
 			rl.Unlock()
 			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 			return
 		}
-		
+
 		times = append(times, now)
 		rl.ips[ip] = times
 		rl.Unlock()
-		
+
 		next.ServeHTTP(w, r)
 	})
 }

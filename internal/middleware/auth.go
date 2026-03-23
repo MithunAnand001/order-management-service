@@ -10,6 +10,7 @@ import (
 	"order-management-service/internal/utils"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 func AuthMiddleware(secret string, userRepo repository.UserRepository) func(http.Handler) http.Handler {
@@ -39,7 +40,12 @@ func AuthMiddleware(secret string, userRepo repository.UserRepository) func(http
 				return
 			}
 
-			userUUID := claims["uuid"].(string)
+			userUUIDStr := claims["uuid"].(string)
+			userUUID, err := uuid.Parse(userUUIDStr)
+			if err != nil {
+				utils.SendJSON(w, http.StatusUnauthorized, utils.NewErrorResponse(r.Context(), dto.NewAppError(dto.ErrCodeUnauthorized, "Invalid token identity", http.StatusUnauthorized, err)))
+				return
+			}
 
 			// DB Lookup for verification and getting internal ID
 			user, appErr := userRepo.FindByUUID(r.Context(), userUUID)

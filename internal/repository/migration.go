@@ -12,7 +12,7 @@ func RunMigrations(db *gorm.DB) {
 	log.Println("Running database migrations...")
 	// Enable uuid-ossp extension for gen_random_uuid()
 	db.Exec("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\"")
-	
+
 	err := db.AutoMigrate(
 		&models.User{},
 		&models.Product{},

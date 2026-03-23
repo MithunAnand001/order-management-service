@@ -12,6 +12,7 @@ import (
 	"order-management-service/internal/utils"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -81,12 +82,12 @@ func (s *userSer) Login(ctx context.Context, req *dto.LoginRequest) (*dto.LoginR
 		return nil, dto.NewAppError(dto.ErrCodeUnauthorized, "Invalid credentials", http.StatusUnauthorized, err)
 	}
 
-	accessToken, err := s.generateToken(user.UUID.String(), time.Minute*time.Duration(s.cfg.AccessTokenExp))
+	accessToken, err := s.generateToken(user.UUID, time.Minute*time.Duration(s.cfg.AccessTokenExp))
 	if err != nil {
 		return nil, dto.NewInternalError(err)
 	}
 
-	refreshToken, err := s.generateToken(user.UUID.String(), time.Hour*time.Duration(s.cfg.RefreshTokenExp))
+	refreshToken, err := s.generateToken(user.UUID, time.Hour*time.Duration(s.cfg.RefreshTokenExp))
 	if err != nil {
 		return nil, dto.NewInternalError(err)
 	}
@@ -121,13 +122,18 @@ func (s *userSer) RefreshToken(ctx context.Context, req *dto.RefreshTokenRequest
 		return nil, dto.NewAppError(dto.ErrCodeUnauthorized, "Invalid or expired refresh token", http.StatusUnauthorized, err)
 	}
 
-	userUUID := claims["uuid"].(string)
+	userUUIDStr := claims["uuid"].(string)
+	userUUID, err := uuid.Parse(userUUIDStr)
+	if err != nil {
+		return nil, dto.NewAppError(dto.ErrCodeUnauthorized, "Invalid token claims", http.StatusUnauthorized, err)
+	}
+
 	user, appErr := s.repo.FindByUUID(ctx, userUUID)
 	if appErr != nil {
 		return nil, appErr
 	}
 
-	accessToken, err := s.generateToken(user.UUID.String(), time.Minute*time.Duration(s.cfg.AccessTokenExp))
+	accessToken, err := s.generateToken(user.UUID, time.Minute*time.Duration(s.cfg.AccessTokenExp))
 	if err != nil {
 		return nil, dto.NewInternalError(err)
 	}
@@ -135,7 +141,7 @@ func (s *userSer) RefreshToken(ctx context.Context, req *dto.RefreshTokenRequest
 	var newRefreshToken string
 	expTime := time.Unix(int64(claims["exp"].(float64)), 0)
 	if time.Until(expTime) < 6*time.Hour {
-		newRefreshToken, err = s.generateToken(user.UUID.String(), time.Hour*time.Duration(s.cfg.RefreshTokenExp))
+		newRefreshToken, err = s.generateToken(user.UUID, time.Hour*time.Duration(s.cfg.RefreshTokenExp))
 		if err != nil {
 			return nil, dto.NewInternalError(err)
 		}
@@ -148,10 +154,10 @@ func (s *userSer) RefreshToken(ctx context.Context, req *dto.RefreshTokenRequest
 	}, nil
 }
 
-func (s *userSer) generateToken(uuid string, duration time.Duration) (string, error) {
+func (s *userSer) generateToken(userUUID uuid.UUID, duration time.Duration) (string, error) {
 	now := utils.Now()
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"uuid": uuid,
+		"uuid": userUUID.String(),
 		"exp":  now.Add(duration).Unix(),
 		"iat":  now.Unix(),
 	})

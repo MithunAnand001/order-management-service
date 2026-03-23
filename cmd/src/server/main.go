@@ -12,12 +12,11 @@ import (
 
 	"order-management-service/internal/config"
 	"order-management-service/internal/controller"
-	"order-management-service/internal/jobs"
 	"order-management-service/internal/middleware"
-	"order-management-service/internal/rabbitmq"
 	"order-management-service/internal/repository"
 	"order-management-service/internal/routes"
 	"order-management-service/internal/service"
+	"order-management-service/internal/service/rabbitmq"
 
 	"github.com/gorilla/mux"
 	"go.uber.org/zap"
@@ -28,9 +27,8 @@ type App struct {
 	DB       *config.Database
 	Config   *config.Config
 	Logger   *zap.Logger
-	Broker   rabbitmq.MessageBroker
+	Broker   service.MessageBroker
 	Consumer rabbitmq.Consumer
-	OrderJob jobs.OrderJob
 }
 
 func main() {
@@ -44,7 +42,6 @@ func server() {
 			app.Broker.Close()
 		}
 	}()
-	defer app.OrderJob.Stop()
 
 	// Start RabbitMQ Consumer
 	if app.Consumer != nil {
@@ -68,6 +65,7 @@ func server() {
 		}
 	}()
 
+	// Graceful Shutdown
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
@@ -110,11 +108,6 @@ func initializeApp() *App {
 		logger.Warn("RabbitMQ not connected", zap.Error(err))
 	}
 
-	consumer, err := rabbitmq.NewRabbitMQConsumer(cfg, logger)
-	if err != nil {
-		logger.Warn("RabbitMQ Consumer not connected", zap.Error(err))
-	}
-
 	// Repositories (Inject Logger)
 	userRepo := repository.NewUserRepository(dbObj.Instance, logger)
 	productRepo := repository.NewProductRepository(dbObj.Instance, logger)
@@ -123,6 +116,8 @@ func initializeApp() *App {
 	// Services (Inject Logger)
 	userSvc := service.NewUserService(userRepo, cfg, logger)
 	productSvc := service.NewProductService(productRepo, logger)
+	commSvc := service.NewCommunicationService(cfg, logger)
+	activitySvc := service.NewOrderActivityService(userRepo, orderRepo, commSvc, logger)
 	orderSvc := service.NewOrderService(orderRepo, productRepo, broker, logger)
 
 	// Controllers (Inject Logger)
@@ -130,9 +125,10 @@ func initializeApp() *App {
 	productCtrl := controller.NewProductController(productSvc, logger)
 	orderCtrl := controller.NewOrderController(orderSvc, logger)
 
-	// Jobs
-	orderJob := jobs.NewOrderJob(orderSvc)
-	orderJob.Start()
+	consumer, err := rabbitmq.NewRabbitMQConsumer(cfg, logger, activitySvc)
+	if err != nil {
+		logger.Warn("RabbitMQ Consumer not connected", zap.Error(err))
+	}
 
 	// Router & Middlewares
 	r := mux.NewRouter()
@@ -154,7 +150,6 @@ func initializeApp() *App {
 		Logger:   logger,
 		Broker:   broker,
 		Consumer: consumer,
-		OrderJob: orderJob,
 	}
 }
 

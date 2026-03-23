@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"order-management-service/internal/config"
+	"order-management-service/internal/service"
 
+	"github.com/google/uuid"
 	amqp "github.com/rabbitmq/amqp091-go"
 	"go.uber.org/zap"
 )
@@ -17,13 +19,18 @@ type Consumer interface {
 }
 
 type rabbitMQConsumer struct {
-	conn    *amqp.Connection
-	channel *amqp.Channel
-	cfg     *config.Config
-	logger  *zap.Logger
+	conn        *amqp.Connection
+	channel     *amqp.Channel
+	cfg         *config.Config
+	logger      *zap.Logger
+	activitySvc service.OrderActivityService
 }
 
-func NewRabbitMQConsumer(cfg *config.Config, logger *zap.Logger) (Consumer, error) {
+func NewRabbitMQConsumer(
+	cfg *config.Config,
+	logger *zap.Logger,
+	activitySvc service.OrderActivityService,
+) (Consumer, error) {
 	conn, err := amqp.Dial(cfg.RabbitMQURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
@@ -35,10 +42,11 @@ func NewRabbitMQConsumer(cfg *config.Config, logger *zap.Logger) (Consumer, erro
 	}
 
 	return &rabbitMQConsumer{
-		conn:    conn,
-		channel: ch,
-		cfg:     cfg,
-		logger:  logger,
+		conn:        conn,
+		channel:     ch,
+		cfg:         cfg,
+		logger:      logger,
+		activitySvc: activitySvc,
 	}, nil
 }
 
@@ -46,7 +54,7 @@ func (c *rabbitMQConsumer) Consume(ctx context.Context) error {
 	msgs, err := c.channel.Consume(
 		c.cfg.RabbitQueue,
 		"",    // consumer
-		false, // auto-ack (set to false for manual ack/retry)
+		false, // auto-ack
 		false, // exclusive
 		false, // no-local
 		false, // no-wait
@@ -58,10 +66,11 @@ func (c *rabbitMQConsumer) Consume(ctx context.Context) error {
 
 	go func() {
 		for d := range msgs {
-			c.logger.Info("Received a message", zap.String("body", string(d.Body)))
-			
-			err := c.processMessage(d.Body)
+			c.logger.Info("Received message from queue", zap.String("body", string(d.Body)))
+
+			err := c.processMessage(ctx, d.Body)
 			if err != nil {
+				c.logger.Error("Failed to process message, initiating retry", zap.Error(err))
 				c.handleRetry(d)
 			} else {
 				d.Ack(false)
@@ -69,41 +78,40 @@ func (c *rabbitMQConsumer) Consume(ctx context.Context) error {
 		}
 	}()
 
-	c.logger.Info("Waiting for messages...")
+	c.logger.Info("RabbitMQ Consumer started successfully")
 	return nil
 }
 
-func (c *rabbitMQConsumer) processMessage(body []byte) error {
-	// Business logic for post-order creation activities
-	var payload map[string]interface{}
+func (c *rabbitMQConsumer) processMessage(ctx context.Context, body []byte) error {
+	var payload struct {
+		OrderUUID uuid.UUID `json:"order_uuid"`
+	}
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return err
 	}
-	
-	c.logger.Info("Processing activity for order", zap.Any("payload", payload))
-	return nil
+
+	c.logger.Info("Delegating task to OrderActivityService", zap.String("order_uuid", payload.OrderUUID.String()))
+
+	return c.activitySvc.HandleOrderCreatedActivity(ctx, payload.OrderUUID)
 }
 
 func (c *rabbitMQConsumer) handleRetry(d amqp.Delivery) {
-	// Extract retry count from headers
 	retryCount := 0
 	if d.Headers == nil {
 		d.Headers = make(amqp.Table)
 	}
-	
+
 	if val, ok := d.Headers["x-retry-count"].(int32); ok {
 		retryCount = int(val)
 	}
 
 	if retryCount < c.cfg.MaxRetryAttempts {
 		retryCount++
-		c.logger.Warn("Retrying message", zap.Int("attempt", retryCount))
-		
-		// Wait before retrying (Exponential backoff simplified)
-		delay := time.Duration(c.cfg.RetryBaseDelay * retryCount) * time.Millisecond
+		c.logger.Warn("Retrying background task", zap.Int("attempt", retryCount))
+
+		delay := time.Duration(c.cfg.RetryBaseDelay*retryCount) * time.Millisecond
 		time.Sleep(delay)
 
-		// Publish back to exchange with incremented retry count
 		headers := d.Headers
 		headers["x-retry-count"] = int32(retryCount)
 
@@ -118,15 +126,15 @@ func (c *rabbitMQConsumer) handleRetry(d amqp.Delivery) {
 				Headers:     headers,
 			},
 		)
-		
+
 		if err != nil {
 			c.logger.Error("Failed to republish for retry", zap.Error(err))
-			d.Nack(false, true) // Requeue to original queue as last resort
+			d.Nack(false, true)
 		} else {
 			d.Ack(false)
 		}
 	} else {
 		c.logger.Error("Max retry attempts reached. Moving to DLX.", zap.String("body", string(d.Body)))
-		d.Nack(false, false) // Nack without requeue triggers DLX
+		d.Nack(false, false)
 	}
 }

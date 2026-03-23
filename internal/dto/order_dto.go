@@ -37,12 +37,12 @@ type OrderEventResponse struct {
 }
 
 type ProductResponse struct {
-	UUID           string  `json:"uuid"`
-	SKU            string  `json:"sku"`
-	Name           string  `json:"name"`
-	Description    string  `json:"description"`
-	CurrentPrice   float64 `json:"current_price"`
-	StockQuantity  int     `json:"stock_quantity"`
+	UUID          string  `json:"uuid"`
+	SKU           string  `json:"sku"`
+	Name          string  `json:"name"`
+	Description   string  `json:"description"`
+	CurrentPrice  float64 `json:"current_price"`
+	StockQuantity int     `json:"stock_quantity"`
 }
 
 type ProductListResponse struct {

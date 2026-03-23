@@ -36,12 +36,12 @@ func (s *productSer) GetProducts(ctx context.Context, search string, limit, offs
 	resItems := make([]dto.ProductResponse, 0, len(products))
 	for _, p := range products {
 		resItems = append(resItems, dto.ProductResponse{
-			UUID:           p.UUID.String(),
-			SKU:            p.SKU,
-			Name:           p.Name,
-			Description:    p.Description,
-			CurrentPrice:   p.CurrentPrice,
-			StockQuantity:  p.StockQuantity,
+			UUID:          p.UUID.String(),
+			SKU:           p.SKU,
+			Name:          p.Name,
+			Description:   p.Description,
+			CurrentPrice:  p.CurrentPrice,
+			StockQuantity: p.StockQuantity,
 		})
 	}
 

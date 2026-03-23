@@ -9,19 +9,21 @@ import (
 	"order-management-service/internal/models"
 	"order-management-service/internal/utils"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
-type userRepo struct {
-	db     *gorm.DB
-	logger *zap.Logger
-}
-
 type UserRepository interface {
 	Create(ctx context.Context, user *models.User) (*models.User, *dto.AppError)
 	FindByEmail(ctx context.Context, email string) (*models.User, *dto.AppError)
-	FindByUUID(ctx context.Context, uuid string) (*models.User, *dto.AppError)
+	FindByUUID(ctx context.Context, uuid uuid.UUID) (*models.User, *dto.AppError)
+	FindByID(ctx context.Context, id uint) (*models.User, *dto.AppError)
+}
+
+type userRepo struct {
+	db     *gorm.DB
+	logger *zap.Logger
 }
 
 func NewUserRepository(db *gorm.DB, logger *zap.Logger) UserRepository {
@@ -62,14 +64,14 @@ func (r *userRepo) FindByEmail(ctx context.Context, email string) (*models.User,
 	return &user, nil
 }
 
-func (r *userRepo) FindByUUID(ctx context.Context, uuid string) (*models.User, *dto.AppError) {
+func (r *userRepo) FindByUUID(ctx context.Context, uuid uuid.UUID) (*models.User, *dto.AppError) {
 	reqID := utils.GetRequestID(ctx)
 	r.logger.Info("Start UserRepository.FindByUUID", zap.String("request_id", reqID))
 
 	var user models.User
 	if err := r.db.WithContext(ctx).Where("uuid = ? AND is_active = ?", uuid, true).First(&user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			r.logger.Warn("NotFound UserRepository.FindByUUID", zap.String("request_id", reqID), zap.String("uuid", uuid))
+			r.logger.Warn("NotFound UserRepository.FindByUUID", zap.String("request_id", reqID), zap.String("uuid", uuid.String()))
 			return nil, dto.NewNotFoundError("User not found")
 		}
 		r.logger.Error("Error UserRepository.FindByUUID", zap.String("request_id", reqID), zap.Error(err))
@@ -77,5 +79,23 @@ func (r *userRepo) FindByUUID(ctx context.Context, uuid string) (*models.User, *
 	}
 
 	r.logger.Info("End UserRepository.FindByUUID", zap.String("request_id", reqID))
+	return &user, nil
+}
+
+func (r *userRepo) FindByID(ctx context.Context, id uint) (*models.User, *dto.AppError) {
+	reqID := utils.GetRequestID(ctx)
+	r.logger.Info("Start UserRepository.FindByID", zap.String("request_id", reqID))
+
+	var user models.User
+	if err := r.db.WithContext(ctx).Where("id = ? AND is_active = ?", id, true).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			r.logger.Warn("NotFound UserRepository.FindByID", zap.String("request_id", reqID), zap.Uint("id", id))
+			return nil, dto.NewNotFoundError("User not found")
+		}
+		r.logger.Error("Error UserRepository.FindByID", zap.String("request_id", reqID), zap.Error(err))
+		return nil, dto.NewInternalError(err)
+	}
+
+	r.logger.Info("End UserRepository.FindByID", zap.String("request_id", reqID))
 	return &user, nil
 }
