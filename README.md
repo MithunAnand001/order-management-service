@@ -16,7 +16,7 @@ A robust backend service built with Go for managing e-commerce orders.
 - **Framework:** [gorilla/mux](https://github.com/gorilla/mux)
 - **ORM:** [GORM](https://gorm.io/)
 - **Database:** PostgreSQL
-- **Background Tasks:** [robfig/cron](https://github.com/robfig/cron)
+- **Background Tasks:** [robfig/cron/v3](https://github.com/robfig/cron)
 - **Validation:** [go-playground/validator](https://github.com/go-playground/validator)
 - **Message Broker:** RabbitMQ (for asynchronous activities)
 - **Logging:** [uber-go/zap](https://github.com/uber-go/zap)

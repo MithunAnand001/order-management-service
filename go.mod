@@ -9,6 +9,7 @@ require (
 	github.com/gorilla/mux v1.8.1
 	github.com/joho/godotenv v1.5.1
 	github.com/rabbitmq/amqp091-go v1.10.0
+	github.com/robfig/cron/v3 v3.0.1
 	go.uber.org/zap v1.27.1
 	golang.org/x/crypto v0.46.0
 	gorm.io/driver/postgres v1.6.0

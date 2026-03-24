@@ -12,6 +12,7 @@ import (
 
 	"order-management-service/internal/config"
 	"order-management-service/internal/controller"
+	"order-management-service/internal/jobs"
 	"order-management-service/internal/middleware"
 	"order-management-service/internal/repository"
 	"order-management-service/internal/routes"
@@ -29,6 +30,7 @@ type App struct {
 	Logger   *zap.Logger
 	Broker   service.MessageBroker
 	Consumer rabbitmq.Consumer
+	OrderJob jobs.OrderJob
 }
 
 func main() {
@@ -48,6 +50,11 @@ func server() {
 		if err := app.Consumer.Consume(context.Background()); err != nil {
 			app.Logger.Error("Failed to start consumer", zap.Error(err))
 		}
+	}
+
+	// Start Background Job
+	if app.OrderJob != nil {
+		app.OrderJob.Start()
 	}
 
 	addr := fmt.Sprintf(":%s", app.Config.AppPort)
@@ -71,6 +78,11 @@ func server() {
 	<-quit
 
 	app.Logger.Info("Shutting down server...")
+
+	// Stop Background Job
+	if app.OrderJob != nil {
+		app.OrderJob.Stop()
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -132,6 +144,8 @@ func initializeApp() *App {
 		logger.Warn("RabbitMQ Consumer not connected", zap.Error(err))
 	}
 
+	orderJob := jobs.NewOrderJob(orderSvc, logger)
+
 	// Router & Middlewares
 	r := mux.NewRouter()
 	r.Use(middleware.RequestIDMiddleware)
@@ -152,6 +166,7 @@ func initializeApp() *App {
 		Logger:   logger,
 		Broker:   broker,
 		Consumer: consumer,
+		OrderJob: orderJob,
 	}
 }
 

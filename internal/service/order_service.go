@@ -35,6 +35,7 @@ type OrderService interface {
 	ListOrders(ctx context.Context, userID uint, status string) ([]dto.OrderResponse, *dto.AppError)
 	CancelOrder(ctx context.Context, userUUID, uuid uuid.UUID) *dto.AppError
 	UpdateOrderStatus(ctx context.Context, claims *middleware.UserClaims, orderUUID uuid.UUID, req *dto.UpdateOrderStatusRequest) *dto.AppError
+	ProcessPendingOrders(ctx context.Context) *dto.AppError
 }
 
 func NewOrderService(orderRepo repository.OrderRepository, productRepo repository.ProductRepository, userRepo repository.UserRepository, broker MessageBroker, logger *zap.Logger) OrderService {
@@ -260,6 +261,20 @@ func (s *orderSer) UpdateOrderStatus(ctx context.Context, claims *middleware.Use
 		}()
 	}
 
+	return nil
+}
+
+func (s *orderSer) ProcessPendingOrders(ctx context.Context) *dto.AppError {
+	reqID := utils.GetRequestID(ctx)
+	s.logger.Info("Start OrderService.ProcessPendingOrders", zap.String("request_id", reqID))
+
+	// Directly call the bulk update repository method
+	if appErr := s.orderRepo.UpdatePendingToProcessingBulk(ctx); appErr != nil {
+		s.logger.Error("Error OrderService.ProcessPendingOrders.BulkUpdate", zap.String("request_id", reqID), zap.Error(appErr.Err))
+		return appErr
+	}
+
+	s.logger.Info("End OrderService.ProcessPendingOrders", zap.String("request_id", reqID))
 	return nil
 }
 

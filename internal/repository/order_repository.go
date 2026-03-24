@@ -21,6 +21,9 @@ type OrderRepository interface {
 	FindByUUID(ctx context.Context, uuid uuid.UUID) (*models.Order, *dto.AppError)
 	FindAll(ctx context.Context, userID uint, status string) ([]models.Order, *dto.AppError)
 	UpdateStatusWithStock(ctx context.Context, id uint, status models.OrderStatus, log models.OrderEventLog) *dto.AppError
+	UpdateStatus(ctx context.Context, id uint, status models.OrderStatus, log models.OrderEventLog) *dto.AppError
+	FindPendingOrders(ctx context.Context) ([]models.Order, *dto.AppError)
+	UpdatePendingToProcessingBulk(ctx context.Context) *dto.AppError
 }
 
 type orderRepo struct {
@@ -30,6 +33,59 @@ type orderRepo struct {
 
 func NewOrderRepository(db *gorm.DB, logger *zap.Logger) OrderRepository {
 	return &orderRepo{db: db, logger: logger}
+}
+
+func (r *orderRepo) UpdatePendingToProcessingBulk(ctx context.Context) *dto.AppError {
+	reqID := utils.GetRequestID(ctx)
+	r.logger.Info("Start OrderRepository.UpdatePendingToProcessingBulk", zap.String("request_id", reqID))
+
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		// 1. GORM Pluck: Efficiently get only the IDs of PENDING orders
+		var orderIDs []uint
+		if err := tx.Model(&models.Order{}).
+			Where("status = ?", models.StatusPending).
+			Pluck("id", &orderIDs).Error; err != nil {
+			return err
+		}
+
+		if len(orderIDs) == 0 {
+			return nil
+		}
+
+		// 2. GORM Bulk Update: Update status for all fetched IDs
+		if err := tx.Model(&models.Order{}).
+			Where("id IN ?", orderIDs).
+			Update("status", models.StatusProcessing).Error; err != nil {
+			return err
+		}
+
+		// 3. GORM Bulk Create: Create audit logs for all IDs in one query
+		logs := make([]models.OrderEventLog, 0, len(orderIDs))
+		for _, id := range orderIDs {
+			logs = append(logs, models.OrderEventLog{
+				OrderID:     id,
+				FromStatus:  models.StatusPending,
+				ToStatus:    models.StatusProcessing,
+				Reason:      "Scheduled Batch Update",
+				TriggeredBy: "SYSTEM",
+			})
+		}
+
+		// GORM natively handles bulk insert when passed a slice
+		if err := tx.Create(&logs).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		r.logger.Error("Error OrderRepository.UpdatePendingToProcessingBulk", zap.String("request_id", reqID), zap.Error(err))
+		return dto.NewInternalError(err)
+	}
+
+	r.logger.Info("End OrderRepository.UpdatePendingToProcessingBulk", zap.String("request_id", reqID))
+	return nil
 }
 
 func (r *orderRepo) CreateWithStock(ctx context.Context, order *models.Order) (*models.Order, *dto.AppError) {
@@ -120,6 +176,43 @@ func (r *orderRepo) UpdateStatusWithStock(ctx context.Context, id uint, status m
 
 	r.logger.Info("End OrderRepository.UpdateStatusWithStock", zap.String("request_id", reqID))
 	return nil
+}
+
+func (r *orderRepo) UpdateStatus(ctx context.Context, id uint, status models.OrderStatus, log models.OrderEventLog) *dto.AppError {
+	reqID := utils.GetRequestID(ctx)
+	r.logger.Info("Start OrderRepository.UpdateStatus", zap.String("request_id", reqID))
+
+	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&models.Order{}).Where("id = ?", id).Update("status", status).Error; err != nil {
+			return err
+		}
+		log.OrderID = id
+		if err := tx.Create(&log).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		r.logger.Error("Error OrderRepository.UpdateStatus", zap.String("request_id", reqID), zap.Error(err))
+		return dto.NewInternalError(err)
+	}
+
+	r.logger.Info("End OrderRepository.UpdateStatus", zap.String("request_id", reqID))
+	return nil
+}
+
+func (r *orderRepo) FindPendingOrders(ctx context.Context) ([]models.Order, *dto.AppError) {
+	reqID := utils.GetRequestID(ctx)
+	r.logger.Info("Start OrderRepository.FindPendingOrders", zap.String("request_id", reqID))
+
+	var orders []models.Order
+	if err := r.db.WithContext(ctx).Where("status = ?", models.StatusPending).Find(&orders).Error; err != nil {
+		r.logger.Error("Error OrderRepository.FindPendingOrders", zap.String("request_id", reqID), zap.Error(err))
+		return nil, dto.NewInternalError(err)
+	}
+
+	r.logger.Info("End OrderRepository.FindPendingOrders", zap.String("request_id", reqID))
+	return orders, nil
 }
 
 func (r *orderRepo) FindByID(ctx context.Context, id uint) (*models.Order, *dto.AppError) {
